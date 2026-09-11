@@ -5,7 +5,9 @@
   const canvas = $('#arena'), ctx = canvas.getContext('2d');
   const lobby = $('#lobby'), game = $('#game');
   const keys = {a:false,s:false,d:false,w:false};
-  const state = { socket:null, roomCode:'', name:'', playerId:null, players:[], bullets:[], walls:[], winner:null, round:0, connected:false, shooting:false, lastShot:0, reconnectTimer:null, dpr:1, aim:{x:500,y:325}, leaving:false, world:{width:1000,height:650}, reconnecting:false, renderPlayers:new Map() };
+  const state = { socket:null, roomCode:'', name:'', playerId:null, players:[], bullets:[], walls:[], winner:null, round:0, connected:false, shooting:false, lastShot:0, reconnectTimer:null, dpr:1, aim:{x:500,y:325}, leaving:false, world:{width:1000,height:650}, reconnecting:false, renderPlayers:new Map(), predictedLocal:null, serverLocal:null, pendingInputs:[], nextInputSeq:0, lastAck:0, inputDirty:false, lastInputSentAt:0, lastPredictAt:0, muzzleFlashUntil:0 };
+  const PLAYER_RADIUS = 22;
+  const PLAYER_SPEED = 230;
   const COLORS = ['#ff669b','#58b8e8'];
 
   /** 将大厅切换到游戏界面并更新房间信息。 */
@@ -40,7 +42,7 @@
       state.roomCode = data.roomCode || state.roomCode; state.playerId = data.playerId || state.playerId; state.world = data.world || state.world;
       state.walls = data.walls || state.walls; updatePlayers(data.players || []); toggleWaiting((data.status || '').toLowerCase() !== 'playing' && (data.players || []).length < 2); return;
     }
-    if (type === 'state' || type === 'game_state') { state.round = data.round || state.round; state.bullets = Array.isArray(data.bullets) ? data.bullets : Object.values(data.bullets || {}); state.walls = data.walls || state.walls; state.world = data.world || state.world; updatePlayers(data.players || []); state.winner = data.winner ?? null; if (state.winner) showResult(state.winner); else $('#result').classList.add('hidden'); toggleWaiting(state.players.length < 2); return; }
+    if (type === 'state' || type === 'game_state') { state.round = data.round || state.round; state.bullets = Array.isArray(data.bullets) ? data.bullets : Object.values(data.bullets || {}); state.walls = data.walls || state.walls; state.world = data.world || state.world; const players = data.players || []; const me = players.find(p => p.id === state.playerId); if (me) reconcileLocal(me, data); updatePlayers(players); state.winner = data.winner ?? null; if (state.winner) showResult(state.winner); else $('#result').classList.add('hidden'); toggleWaiting(state.players.length < 2); return; }
     if (type === 'event' || type === 'message') { if (data.message) toast(data.message); if (data.event === 'start' || data.event === 'round_start') toast('开战！'); if (data.event === 'win' || data.event === 'round_end') showResult(data.winner); return; }
     if (type === 'error') { $('#lobby-msg').textContent = data.message || '房间操作失败'; toast(data.message || '操作失败'); }
   }
@@ -54,18 +56,26 @@
   /** 显示胜负结果动画。 @param {string|number} winner 获胜玩家标识。 */
   function showResult(winner) { const won = String(winner) === String(state.playerId) || winner === state.name || winner === 'me'; $('#result-title').textContent = won ? '胜利！' : '再接再厉'; $('#result-sub').textContent = won ? '你是今天的糖果之王' : '下一发子弹，扭转局势'; $('#result').classList.remove('hidden'); }
 
-  /** 发送当前按键、瞄准点和射击状态给服务端。 @param {{x:number,y:number}=} aim 服务端世界坐标中的瞄准点。 */
-  function sendInput(aim) { if (aim) state.aim = aim; send({type:'input', keys:{...keys}, shoot:state.shooting, aim:state.aim}); }
+  /** 判断圆形玩家是否与地图掩体相交。 @param {number} x 玩家中心 X。 @param {number} y 玩家中心 Y。 @param {object} wall 墙体矩形。 @returns {boolean} 是否发生碰撞。 */
+  function localCircleRect(x, y, wall) { const cx = Math.max(wall.x, Math.min(x, wall.x + wall.w)); const cy = Math.max(wall.y, Math.min(y, wall.y + wall.h)); return (x - cx) ** 2 + (y - cy) ** 2 <= PLAYER_RADIUS ** 2; }
+  /** 在本地预测一帧 ASDW 移动，碰撞规则与服务端保持一致。 @param {{x:number,y:number}} point 当前坐标。 @param {object} input 输入快照。 @param {number} dt 预测时间（秒）。 @returns {{x:number,y:number}} 预测后的世界坐标。 */
+  function predictMove(point, input, dt) { let dx = 0, dy = 0; if (input.a) dx -= 1; if (input.d) dx += 1; if (input.s) dy += 1; if (input.w) dy -= 1; if (!dx && !dy) return point; const len = Math.hypot(dx, dy) || 1; const nx = Math.max(PLAYER_RADIUS, Math.min(state.world.width - PLAYER_RADIUS, point.x + dx / len * PLAYER_SPEED * dt)); const ny = Math.max(PLAYER_RADIUS, Math.min(state.world.height - PLAYER_RADIUS, point.y + dy / len * PLAYER_SPEED * dt)); const walls = state.walls || []; if (!walls.some(w => localCircleRect(nx, point.y, w))) point.x = nx; if (!walls.some(w => localCircleRect(point.x, ny, w))) point.y = ny; return point; }
+  /** 将服务端坐标与已确认输入对齐，并重放未确认输入，消除网络往返造成的移动停顿。 @param {object} authoritative 服务端玩家状态。 @param {object} packet 服务端状态包，可能携带 inputAck/lastInputSeq。 */
+  function reconcileLocal(authoritative, packet) { const seqMap = packet.lastProcessedSeq || packet.processedSeq || {}; const ackValue = authoritative.inputAck ?? seqMap[state.playerId] ?? packet.inputAck ?? packet.lastInputSeq ?? packet.lastProcessedInput ?? packet.ack; const ack = Number(ackValue); if (Number.isFinite(ack) && ack >= state.lastAck) { state.lastAck = ack; state.pendingInputs = state.pendingInputs.filter(item => item.seq > ack); } state.serverLocal = {x:Number(authoritative.x) || 0, y:Number(authoritative.y) || 0}; const replay = { ...state.serverLocal }; for (const item of state.pendingInputs) predictMove(replay, item.keys, item.dt || 1 / 30); state.predictedLocal = replay; state.lastPredictAt = performance.now(); }
+  /** 发送当前按键、瞄准点和射击状态；每条输入带序号供服务端确认。 @param {{x:number,y:number}=} aim 服务端世界坐标中的瞄准点。 @param {boolean=} immediate 是否跳过节流立即发送。 */
+  function sendInput(aim, immediate = true) { if (aim) state.aim = aim; state.inputDirty = true; if (!immediate) return; flushInput(true); }
+  /** 按约 30Hz 发送输入，并在按键变化或开枪时立即补发。 @param {boolean=} force 是否忽略发送间隔。 */
+  function flushInput(force = false) { if (!state.connected || (!state.inputDirty && !state.shooting && !Object.values(keys).some(Boolean))) return; const now = performance.now(); if (!force && now - state.lastInputSentAt < 33) return; const input = { keys:{...keys}, shoot:state.shooting, aim:{...state.aim} }; const seq = ++state.nextInputSeq; state.pendingInputs.push({ seq, keys:input.keys, dt:1 / 30 }); send({type:'input', ...input, seq}); state.lastInputSentAt = now; state.inputDirty = false; if (state.pendingInputs.length > 120) state.pendingInputs.splice(0, state.pendingInputs.length - 120); }
   /** 将浏览器画布坐标转换为服务端世界坐标，保证瞄准方向在不同屏幕上一致。 */
   function pointerAim(ev) { const r = canvas.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*state.world.width, y:(ev.clientY-r.top)/r.height*state.world.height}; }
-  canvas.addEventListener('pointermove', e => { if (state.connected) sendInput(pointerAim(e)); });
-  canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); state.shooting = true; sendInput(pointerAim(e)); });
+  canvas.addEventListener('pointermove', e => { if (state.connected) sendInput(pointerAim(e), false); });
+  canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); state.shooting = true; state.muzzleFlashUntil = performance.now() + 120; sendInput(pointerAim(e), true); });
   canvas.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('pointerup', () => { if (state.shooting) { state.shooting = false; sendInput(); } });
-  window.addEventListener('keydown', e => { const k=e.key.toLowerCase(); if (k in keys) { keys[k]=true; sendInput(); } if (e.code==='Space') { e.preventDefault(); state.shooting=true; sendInput(); } });
-  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if (k in keys) keys[k]=false; if (e.code==='Space') state.shooting=false; sendInput(); });
-  document.querySelectorAll('.touch-controls button[data-key]').forEach(btn => { const k=btn.dataset.key; const on=e=>{e.preventDefault();keys[k]=true;sendInput()}; const off=e=>{e.preventDefault();keys[k]=false;sendInput()}; btn.addEventListener('pointerdown',on); btn.addEventListener('pointerup',off); btn.addEventListener('pointerleave',off); });
-  $('#touch-shoot').addEventListener('pointerdown', e=>{e.preventDefault();state.shooting=true;sendInput()}); $('#touch-shoot').addEventListener('pointerup', e=>{e.preventDefault();state.shooting=false;sendInput()});
+  window.addEventListener('keydown', e => { const k=e.key.toLowerCase(); if (k in keys) { if (!keys[k]) state.inputDirty = true; keys[k]=true; sendInput(undefined, true); } if (e.code==='Space') { e.preventDefault(); state.shooting=true; state.muzzleFlashUntil = performance.now() + 120; sendInput(undefined, true); } });
+  window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if (k in keys) keys[k]=false; if (e.code==='Space') state.shooting=false; sendInput(undefined, true); });
+  document.querySelectorAll('.touch-controls button[data-key]').forEach(btn => { const k=btn.dataset.key; const on=e=>{e.preventDefault();keys[k]=true;sendInput(undefined, true)}; const off=e=>{e.preventDefault();keys[k]=false;sendInput(undefined, true)}; btn.addEventListener('pointerdown',on); btn.addEventListener('pointerup',off); btn.addEventListener('pointerleave',off); });
+  $('#touch-shoot').addEventListener('pointerdown', e=>{e.preventDefault();state.shooting=true;state.muzzleFlashUntil = performance.now() + 120;sendInput(undefined, true)}); $('#touch-shoot').addEventListener('pointerup', e=>{e.preventDefault();state.shooting=false;sendInput(undefined, true)});
   $('#create-btn').onclick = () => { const name=($('#nickname').value||'小神枪').trim(); const code=makeRoomCode(); $('#room-code').value=code; $('#lobby-msg').textContent=''; connect(code,name); };
   $('#join-btn').onclick = () => { const name=($('#nickname').value||'小神枪').trim(); const code=($('#room-code').value||'').trim().toUpperCase(); if(code.length!==6){$('#lobby-msg').textContent='请输入 6 位房间码';return} $('#lobby-msg').textContent=''; connect(code,name); };
   $('#leave-btn').onclick = leaveGame;
@@ -74,7 +84,7 @@
   window.addEventListener('resize', resize);
   // 房间切换和移动端旋转都可能改变竞技场尺寸，持续同步 Canvas 分辨率。
   if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe($('.arena-wrap'));
-  setInterval(() => { if (state.connected && (state.shooting || Object.values(keys).some(Boolean))) sendInput(); }, 80);
+  setInterval(() => { if (state.connected) flushInput(false); }, 33);
 
   /** 绘制带圆角的 Canvas 矩形。 @param {CanvasRenderingContext2D} c 绘图上下文。 @param {number} x 左上角 X。 @param {number} y 左上角 Y。 @param {number} w 宽度。 @param {number} h 高度。 @param {number} r 圆角半径。 */
   function roundedRect(c,x,y,w,h,r){c.beginPath(); if (typeof c.roundRect === 'function') c.roundRect(x,y,w,h,r); else { c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); } c.fill()}
@@ -83,12 +93,14 @@
   /** 绘制边界墙和地图内的随机掩体。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
   function drawWalls(w,h){ const boundary=[{x:25,y:25,w:950,h:18},{x:25,y:607,w:950,h:18},{x:25,y:25,w:18,h:600},{x:957,y:25,w:18,h:600}]; const walls=boundary.concat(state.walls || []); const sx=w/state.world.width, sy=h/state.world.height; walls.forEach((wall,i)=>{const x=wall.x*sx,y=wall.y*sy,ww=wall.w*sx,hh=wall.h*sy;ctx.fillStyle='#8063aa';roundedRect(ctx,x+4*sx,y+6*sy,ww,hh,8);ctx.fillStyle=i%3===0?'#a98dc9':'#997cbe';roundedRect(ctx,x,y,ww,hh,8);ctx.fillStyle='#cdb8e7';roundedRect(ctx,x+8*sx,y+4*sy,Math.max(8*sx,ww-20*sx),Math.min(5*sy,hh/3),3)}) }
   /** 绘制一个带表情的卡通角色。 @param {object} p 服务端玩家状态。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
-  function drawPlayer(p,w,h){ const sx=w/state.world.width,sy=h/state.world.height,x=p.x*sx,y=p.y*sy,r=Math.min(w,h)*.034,col=p.id===state.playerId?COLORS[0]:COLORS[1];ctx.save();ctx.translate(x,y);ctx.fillStyle='#5d477f33';ctx.beginPath();ctx.ellipse(0,r*1.1,r*1.2,r*.42,0,0,Math.PI*2);ctx.fill();ctx.rotate(Number(p.angle)||0);ctx.fillStyle='#ffe28a';roundedRect(ctx,r*.35,-r*.18,r*1.05,r*.36,r*.12);ctx.fillStyle='#ffb35e';roundedRect(ctx,r*1.15,-r*.12,r*.3,r*.24,r*.08);ctx.rotate(-(Number(p.angle)||0));ctx.fillStyle=col;ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.arc(r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.fill();ctx.fillStyle='#423454';ctx.beginPath();ctx.arc(-r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.arc(r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#423454';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,r*.05,r*.3,0,Math.PI);ctx.stroke();ctx.fillStyle='#ffdf6b';ctx.beginPath();ctx.arc(0,-r*.85,r*.32,0,Math.PI*2);ctx.fill();ctx.restore() }
+  function drawPlayer(p,w,h){ const sx=w/state.world.width,sy=h/state.world.height,x=p.x*sx,y=p.y*sy,r=Math.min(w,h)*.034,col=p.id===state.playerId?COLORS[0]:COLORS[1];ctx.save();ctx.translate(x,y);ctx.fillStyle='#5d477f33';ctx.beginPath();ctx.ellipse(0,r*1.1,r*1.2,r*.42,0,0,Math.PI*2);ctx.fill();ctx.rotate(Number(p.angle)||0);ctx.fillStyle='#ffe28a';roundedRect(ctx,r*.35,-r*.18,r*1.05,r*.36,r*.12);ctx.fillStyle='#ffb35e';roundedRect(ctx,r*1.15,-r*.12,r*.3,r*.24,r*.08); if (p.id === state.playerId && state.muzzleFlashUntil > performance.now()) { ctx.fillStyle='#fff4a8'; ctx.shadowColor='#ffcb62'; ctx.shadowBlur=10; ctx.beginPath(); ctx.arc(r*1.62,0,r*.28,0,Math.PI*2); ctx.fill(); ctx.shadowBlur=0; } ctx.rotate(-(Number(p.angle)||0));ctx.fillStyle=col;ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.arc(r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.fill();ctx.fillStyle='#423454';ctx.beginPath();ctx.arc(-r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.arc(r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#423454';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,r*.05,r*.3,0,Math.PI);ctx.stroke();ctx.fillStyle='#ffdf6b';ctx.beginPath();ctx.arc(0,-r*.85,r*.32,0,Math.PI*2);ctx.fill();ctx.restore() }
   /** 绘制可爱的糖果子弹及其高光。 @param {object} b 服务端子弹状态。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
   function drawBullet(b,w,h){const x=b.x*w/state.world.width,y=b.y*h/state.world.height;ctx.fillStyle='#fff4a8';ctx.shadowColor='#ffcb62';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(x,y,Math.max(5,Math.min(w,h)*.012),0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.fillStyle='#ff8da8';ctx.beginPath();ctx.arc(x-2,y-2,2,0,Math.PI*2);ctx.fill()}
   /** 按屏幕刷新率循环渲染当前对战状态。 */
   /** 对服务端快照做轻量插值，减少网络抖动造成的两端画面跳动。 */
   function smoothPlayer(player){ const old=state.renderPlayers.get(player.id); if(!old){ state.renderPlayers.set(player.id,{...player}); return player; } old.x += (player.x-old.x)*.35; old.y += (player.y-old.y)*.35; old.angle = player.angle; old.hp = player.hp; return old; }
-  function render(){ if(game.classList.contains('active')){const w=canvas.width/state.dpr,h=canvas.height/state.dpr;ctx.setTransform(state.dpr,0,0,state.dpr,0,0);drawBackground(w,h);drawWalls(w,h);state.bullets.forEach(b=>drawBullet(b,w,h));state.players.forEach(p=>drawPlayer(smoothPlayer(p),w,h));} requestAnimationFrame(render)}
+  /** 每帧推进本地玩家预测位置；服务端快照到达时会重新校正并重放未确认输入。 */
+  function advancePrediction() { if (!state.predictedLocal) { const me = state.players.find(p => p.id === state.playerId); if (me) state.predictedLocal = {x:Number(me.x) || 0, y:Number(me.y) || 0}; } if (!state.predictedLocal) return; const now = performance.now(); const dt = state.lastPredictAt ? Math.min(.05, Math.max(0, (now - state.lastPredictAt) / 1000)) : 0; state.lastPredictAt = now; if (dt > 0) predictMove(state.predictedLocal, keys, dt); }
+  function render(){ if(game.classList.contains('active')){const w=canvas.width/state.dpr,h=canvas.height/state.dpr;ctx.setTransform(state.dpr,0,0,state.dpr,0,0);advancePrediction();drawBackground(w,h);drawWalls(w,h);state.bullets.forEach(b=>drawBullet(b,w,h));state.players.forEach(p=>{ const local = p.id === state.playerId && state.predictedLocal ? {...p, x:state.predictedLocal.x, y:state.predictedLocal.y} : p; drawPlayer(smoothPlayer(local),w,h); });} requestAnimationFrame(render)}
   render();
 })();
