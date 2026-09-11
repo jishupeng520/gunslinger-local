@@ -13,7 +13,7 @@
   /** 将大厅切换到游戏界面并更新房间信息。 */
   function enterGame() { lobby.classList.remove('active'); game.classList.add('active'); $('#room-label').textContent = `ROOM ${state.roomCode || '——'}`; $('#waiting-code').textContent = state.roomCode || '——'; $('#my-name').textContent = state.name || '你'; resize(); requestAnimationFrame(resize); }
   /** 将游戏界面恢复为大厅，并清理本局连接状态。 */
-  function leaveGame() { state.leaving = true; clearTimeout(state.reconnectTimer); if (state.socket) state.socket.close(); state.socket = null; state.connected = false; state.reconnecting = false; state.players = []; state.renderPlayers.clear(); state.bullets = []; state.walls = []; game.classList.remove('active'); lobby.classList.add('active'); }
+  function leaveGame() { state.leaving = true; clearTimeout(state.reconnectTimer); if (state.socket) state.socket.close(); state.socket = null; state.connected = false; state.reconnecting = false; state.players = []; state.renderPlayers.clear(); state.bullets = []; state.walls = []; state.predictedLocal = null; state.serverLocal = null; state.pendingInputs = []; state.nextInputSeq = 0; state.lastAck = 0; state.lastPredictAt = 0; game.classList.remove('active'); lobby.classList.add('active'); }
   /** 生成可读的六位房间码。 */
   function makeRoomCode() { const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; return Array.from({length:6}, () => chars[Math.floor(Math.random()*chars.length)]).join(''); }
   /** 在页面顶部显示短暂的提示消息。 @param {string} message 要展示的中文提示。 */
