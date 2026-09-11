@@ -4,7 +4,7 @@
   const $ = (s) => document.querySelector(s);
   const canvas = $('#arena'), ctx = canvas.getContext('2d');
   const lobby = $('#lobby'), game = $('#game');
-  const keys = {a:false,s:false,d:false,f:false};
+  const keys = {a:false,s:false,d:false,w:false};
   const state = { socket:null, roomCode:'', name:'', playerId:null, players:[], bullets:[], walls:[], winner:null, round:0, connected:false, shooting:false, lastShot:0, reconnectTimer:null, dpr:1, aim:{x:500,y:325}, leaving:false, world:{width:1000,height:650}, reconnecting:false, renderPlayers:new Map() };
   const COLORS = ['#ff669b','#58b8e8'];
 

@@ -109,21 +109,21 @@ function createRoom(code = createRoomCode()) {
 function addPlayer(room, session, name) {
   if (room.players.size >= 2) throw new Error('房间已满');
   const color = room.players.size === 0 ? 'pink' : 'blue';
-  const player = { id: session.id, name: String(name || `枪手${session.id.slice(0, 3)}`).trim().slice(0, 16) || `枪手${session.id.slice(0, 3)}`, color, socket: session.socket, room, x: color === 'pink' ? 120 : WORLD.width - 120, y: WORLD.height / 2, angle: color === 'pink' ? 0 : Math.PI, hp: 1, keys: { a: false, s: false, d: false, f: false }, shooting: false, lastShotAt: 0, disconnectedAt: null };
+  const player = { id: session.id, name: String(name || `枪手${session.id.slice(0, 3)}`).trim().slice(0, 16) || `枪手${session.id.slice(0, 3)}`, color, socket: session.socket, room, x: color === 'pink' ? 120 : WORLD.width - 120, y: WORLD.height / 2, angle: color === 'pink' ? 0 : Math.PI, hp: 1, keys: { a: false, s: false, d: false, w: false }, shooting: false, lastShotAt: 0, disconnectedAt: null };
   room.players.set(player.id, player); session.player = player; session.room = room;
   if (room.players.size === 2) { room.status = 'playing'; broadcastRoom(room, 'event', { event: 'start', message: '对战开始！' }); }
   return player;
 }
 /** @param {object} player @returns {void} 将玩家恢复到本局出生点。 */
-function resetPlayer(player) { player.x = player.color === 'pink' ? 120 : WORLD.width - 120; player.y = WORLD.height / 2; player.hp = 1; player.angle = player.color === 'pink' ? 0 : Math.PI; player.keys = { a: false, s: false, d: false, f: false }; player.shooting = false; }
+function resetPlayer(player) { player.x = player.color === 'pink' ? 120 : WORLD.width - 120; player.y = WORLD.height / 2; player.hp = 1; player.angle = player.color === 'pink' ? 0 : Math.PI; player.keys = { a: false, s: false, d: false, w: false }; player.shooting = false; }
 /** @param {object} room @returns {void} 重置房间本局状态并递增局数。 */
 function restartRoom(room) { room.round += 1; room.winner = null; room.bullets = []; room.status = room.players.size === 2 ? 'playing' : 'waiting'; for (const player of room.players.values()) resetPlayer(player); broadcastRoom(room, 'room', roomInfo(room)); }
 
-/** @param {object} player @returns {void} 按 ASDF 输入移动玩家并避开墙体。 */
+/** @param {object} player @returns {void} 按 ASDW 输入移动玩家并避开墙体。 */
 function movePlayer(player) {
   const dt = TICK_MS / 1000; const k = player.keys; let dx = 0; let dy = 0;
-  // A/D 控制左右，S/F 控制上下；服务端统一归一化对角线速度。
-  if (k.a) dx -= 1; if (k.d) dx += 1; if (k.s) dy += 1; if (k.f) dy -= 1;
+  // A/D 控制左右，W/S 控制上下；服务端统一归一化对角线速度。
+  if (k.a) dx -= 1; if (k.d) dx += 1; if (k.s) dy += 1; if (k.w) dy -= 1;
   if (!dx && !dy) return;
   const length = Math.hypot(dx, dy) || 1; const nx = clamp(player.x + dx / length * PLAYER_SPEED * dt, PLAYER_RADIUS, WORLD.width - PLAYER_RADIUS); const ny = clamp(player.y + dy / length * PLAYER_SPEED * dt, PLAYER_RADIUS, WORLD.height - PLAYER_RADIUS);
   if (!roomCollides(player.room, nx, player.y, PLAYER_RADIUS)) player.x = nx;
@@ -188,7 +188,7 @@ function handleMessage(session, payload) {
     player.socket = session.socket; player.disconnectedAt = null; session.player = player; session.room = room; send(session.socket, 'room', { ...roomInfo(room), playerId: player.id }); broadcastRoom(room, 'event', { event: 'reconnected', message: '玩家已重新连接' }); return;
   }
   const player = session.player; if (!player) return errorEvent(session.socket, '请先加入房间');
-  if (payload.type === 'input') { const keys = payload.keys || {}; for (const key of ['a', 's', 'd', 'f']) if (key in keys) player.keys[key] = Boolean(keys[key]); if ('shoot' in payload) player.shooting = Boolean(payload.shoot); if (payload.aim && Number.isFinite(Number(payload.aim.x)) && Number.isFinite(Number(payload.aim.y))) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x); if (Number.isFinite(Number(payload.angle))) player.angle = Number(payload.angle); return; }
+  if (payload.type === 'input') { const keys = payload.keys || {}; for (const key of ['a', 's', 'd', 'w']) if (key in keys) player.keys[key] = Boolean(keys[key]); if ('shoot' in payload) player.shooting = Boolean(payload.shoot); if (payload.aim && Number.isFinite(Number(payload.aim.x)) && Number.isFinite(Number(payload.aim.y))) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x); if (Number.isFinite(Number(payload.angle))) player.angle = Number(payload.angle); return; }
   if (payload.type === 'shoot' || payload.type === 'fire') { player.shooting = payload.down !== false; if (payload.aim) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x); if (payload.down !== false) fire(player); return; }
   if (payload.type === 'restart') { if (player.room.winner || player.room.status === 'finished') restartRoom(player.room); }
 }
