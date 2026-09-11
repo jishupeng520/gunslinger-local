@@ -31,7 +31,7 @@ const RECONNECT_GRACE_MS = 15000;
  * @property {number} y 世界坐标 Y，单位为像素。
  * @property {number} angle 面向角度，单位为弧度。
  * @property {number} hp 生命状态，1 表示存活，0 表示被击中。
- * @property {{a:boolean,s:boolean,d:boolean,f:boolean}} keys ASDF 四方向按键状态。
+ * @property {{a:boolean,s:boolean,d:boolean,w:boolean}} keys ASDW 四方向按键状态。
  * @property {boolean} shooting 是否持续开火；服务端按冷却生成子弹。
  * @property {number} lastShotAt 最近一次开火时间戳（毫秒）。
  * @property {number|null} disconnectedAt 断线时间戳；null 表示在线。
