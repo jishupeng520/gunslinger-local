@@ -12,7 +12,8 @@ const PORT = Number(process.env.PORT || 3000);
 const HOST = process.env.HOST || '0.0.0.0';
 const PUBLIC_DIR = path.join(__dirname, 'public');
 const WORLD = { width: 1000, height: 650 };
-const TICK_MS = 50;
+// 30Hz 物理循环可缩短输入等待时间，同时保持单进程部署的 CPU 开销可控。
+const TICK_MS = 33;
 const PLAYER_SPEED = 230;
 const PLAYER_RADIUS = 22;
 const BULLET_SPEED = 340;
@@ -34,6 +35,8 @@ const RECONNECT_GRACE_MS = 15000;
  * @property {{a:boolean,s:boolean,d:boolean,w:boolean}} keys ASDW 四方向按键状态。
  * @property {boolean} shooting 是否持续开火；服务端按冷却生成子弹。
  * @property {number} lastShotAt 最近一次开火时间戳（毫秒）。
+ * @property {number} lastInputSeq 最近确认的客户端输入序号；用于丢弃乱序或重复输入。
+ * @property {number|null} lastClientTime 客户端发送输入时的时间戳（毫秒）；仅用于同步诊断，可为空。
  * @property {number|null} disconnectedAt 断线时间戳；null 表示在线。
  */
 
@@ -87,8 +90,12 @@ function rectsOverlap(a, b, padding = 0) { return a.x - padding < b.x + b.w && a
 /** @param {number} cx @param {number} cy @param {number} radius @param {object} rect @returns {boolean} 判断圆与矩形是否相交。 */
 function circleRect(cx, cy, radius, rect) { const x = clamp(cx, rect.x, rect.x + rect.w); const y = clamp(cy, rect.y, rect.y + rect.h); return (cx - x) ** 2 + (cy - y) ** 2 <= radius ** 2; }
 
-/** @param {object} player @returns {object} 返回客户端可见的玩家状态。 */
-function publicPlayer(player) { return { id: player.id, name: player.name, color: player.color, x: Math.round(player.x * 10) / 10, y: Math.round(player.y * 10) / 10, angle: player.angle, hp: player.hp, connected: Boolean(player.socket) }; }
+/**
+ * 返回客户端可见的玩家状态，并携带服务端已确认的输入序号。
+ * @param {Player} player 玩家实体，坐标和生命值均来自服务端权威状态。
+ * @returns {object} 玩家公开状态；inputAck 为最近处理的输入序号，旧客户端可忽略该字段。
+ */
+function publicPlayer(player) { return { id: player.id, name: player.name, color: player.color, x: Math.round(player.x * 10) / 10, y: Math.round(player.y * 10) / 10, angle: player.angle, hp: player.hp, connected: Boolean(player.socket), inputAck: player.lastInputSeq }; }
 /** @param {object} room @returns {object} 构造房间信息，包含墙体和玩家席位。 */
 function roomInfo(room) { return { roomCode: room.code, status: room.status, players: [...room.players.values()].map(publicPlayer), walls: room.walls, world: WORLD }; }
 /** @param {import('ws').WebSocket} socket @param {string} type @param {object} payload @returns {void} 发送统一格式 WebSocket 消息。 */
@@ -105,17 +112,28 @@ function createRoom(code = createRoomCode()) {
   rooms.set(code, room);
   return room;
 }
-/** @param {object} room @param {object} session @param {string} name @returns {object} 将连接加入房间并分配出生点。 */
+/**
+ * 将连接加入房间并分配出生点；第二名玩家加入后立即切换为 playing。
+ * @param {Room} room 目标房间；玩家数必须少于 2，否则抛出“房间已满”。
+ * @param {object} session 当前 WebSocket 会话，使用其 id 与 socket 建立玩家席位。
+ * @param {string} name 玩家昵称；为空时生成默认昵称，最终截断为最多 16 个字符。
+ * @returns {Player} 新建的玩家实体，同时写入 room.players 与 session.player。
+ * @throws {Error} 房间已有两名玩家时抛出房间已满异常。
+ */
 function addPlayer(room, session, name) {
   if (room.players.size >= 2) throw new Error('房间已满');
   const color = room.players.size === 0 ? 'pink' : 'blue';
-  const player = { id: session.id, name: String(name || `枪手${session.id.slice(0, 3)}`).trim().slice(0, 16) || `枪手${session.id.slice(0, 3)}`, color, socket: session.socket, room, x: color === 'pink' ? 120 : WORLD.width - 120, y: WORLD.height / 2, angle: color === 'pink' ? 0 : Math.PI, hp: 1, keys: { a: false, s: false, d: false, w: false }, shooting: false, lastShotAt: 0, disconnectedAt: null };
+  const player = { id: session.id, name: String(name || `枪手${session.id.slice(0, 3)}`).trim().slice(0, 16) || `枪手${session.id.slice(0, 3)}`, color, socket: session.socket, room, x: color === 'pink' ? 120 : WORLD.width - 120, y: WORLD.height / 2, angle: color === 'pink' ? 0 : Math.PI, hp: 1, keys: { a: false, s: false, d: false, w: false }, shooting: false, lastShotAt: 0, lastInputSeq: -1, lastClientTime: null, disconnectedAt: null };
   room.players.set(player.id, player); session.player = player; session.room = room;
   if (room.players.size === 2) { room.status = 'playing'; broadcastRoom(room, 'event', { event: 'start', message: '对战开始！' }); }
   return player;
 }
-/** @param {object} player @returns {void} 将玩家恢复到本局出生点。 */
-function resetPlayer(player) { player.x = player.color === 'pink' ? 120 : WORLD.width - 120; player.y = WORLD.height / 2; player.hp = 1; player.angle = player.color === 'pink' ? 0 : Math.PI; player.keys = { a: false, s: false, d: false, w: false }; player.shooting = false; }
+/**
+ * 将玩家恢复到本局出生点并清空移动、射击及输入确认状态。
+ * @param {Player} player 待重置的玩家实体；颜色决定其左右出生点。
+ * @returns {void} 无返回值，直接修改玩家的坐标、生命、按键和输入序号。
+ */
+function resetPlayer(player) { player.x = player.color === 'pink' ? 120 : WORLD.width - 120; player.y = WORLD.height / 2; player.hp = 1; player.angle = player.color === 'pink' ? 0 : Math.PI; player.keys = { a: false, s: false, d: false, w: false }; player.shooting = false; player.lastInputSeq = -1; player.lastClientTime = null; }
 /** @param {object} room @returns {void} 重置房间本局状态并递增局数。 */
 function restartRoom(room) { room.round += 1; room.winner = null; room.bullets = []; room.status = room.players.size === 2 ? 'playing' : 'waiting'; for (const player of room.players.values()) resetPlayer(player); broadcastRoom(room, 'room', roomInfo(room)); }
 
@@ -159,20 +177,29 @@ function updateBullets(room) {
   }
   room.bullets = next;
 }
-/** @returns {void} 每 50ms 驱动移动、射击、子弹与状态广播。 */
+/**
+ * 每 33ms 驱动移动、射击、子弹与状态广播。
+ * @returns {void} 无返回值；通过 WebSocket 广播带服务端时间和输入确认序号的快照。
+ */
 function tick() {
   for (const room of rooms.values()) {
     if (room.status === 'playing') {
       for (const player of room.players.values()) { if (!player.disconnectedAt) movePlayer(player); if (player.shooting) fire(player); }
       updateBullets(room);
     }
-    const snapshot = { roomCode: room.code, walls: room.walls, world: WORLD, players: [...room.players.values()].map(publicPlayer), bullets: room.bullets.map((b) => ({ id: b.id, x: Math.round(b.x * 10) / 10, y: Math.round(b.y * 10) / 10, vx: b.vx, vy: b.vy, bounces: b.bounces })), winner: room.winner, round: room.round, status: room.status };
+    const players = [...room.players.values()];
+    const snapshot = { roomCode: room.code, walls: room.walls, world: WORLD, serverTime: Date.now(), lastProcessedSeq: Object.fromEntries(players.map((p) => [p.id, p.lastInputSeq])), players: players.map(publicPlayer), bullets: room.bullets.map((b) => ({ id: b.id, x: Math.round(b.x * 10) / 10, y: Math.round(b.y * 10) / 10, vx: b.vx, vy: b.vy, bounces: b.bounces })), winner: room.winner, round: room.round, status: room.status };
     broadcastRoom(room, 'state', snapshot);
   }
 }
 setInterval(tick, TICK_MS);
 
-/** @param {object} session @param {object} payload @returns {void} 处理 join、输入、射击、重开和重连消息。 */
+/**
+ * 处理 join、输入、射击、重开和重连消息。
+ * @param {object} session 当前 WebSocket 会话及其玩家引用。
+ * @param {object} payload 客户端消息；input 消息可带递增 seq、clientTime、keys、shoot 与 aim 字段。
+ * @returns {void} 更新服务端权威状态或向客户端发送错误；过期 seq 的 input 会被忽略。
+ */
 function handleMessage(session, payload) {
   if (!payload || typeof payload.type !== 'string') return;
   if (payload.type === 'join' || payload.type === 'create' || payload.type === 'joinRoom') {
@@ -188,7 +215,23 @@ function handleMessage(session, payload) {
     player.socket = session.socket; player.disconnectedAt = null; session.player = player; session.room = room; send(session.socket, 'room', { ...roomInfo(room), playerId: player.id }); broadcastRoom(room, 'event', { event: 'reconnected', message: '玩家已重新连接' }); return;
   }
   const player = session.player; if (!player) return errorEvent(session.socket, '请先加入房间');
-  if (payload.type === 'input') { const keys = payload.keys || {}; for (const key of ['a', 's', 'd', 'w']) if (key in keys) player.keys[key] = Boolean(keys[key]); if ('shoot' in payload) player.shooting = Boolean(payload.shoot); if (payload.aim && Number.isFinite(Number(payload.aim.x)) && Number.isFinite(Number(payload.aim.y))) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x); if (Number.isFinite(Number(payload.angle))) player.angle = Number(payload.angle); return; }
+  if (payload.type === 'input') {
+    // 客户端预测会连续发送输入；序号保证网络乱序时旧状态不会覆盖新状态。
+    const seq = Number(payload.seq);
+    if (Number.isFinite(seq)) {
+      const normalizedSeq = Math.floor(seq);
+      if (normalizedSeq <= player.lastInputSeq) return;
+      player.lastInputSeq = normalizedSeq;
+    }
+    const clientTime = Number(payload.clientTime);
+    if (Number.isFinite(clientTime)) player.lastClientTime = clientTime;
+    const keys = payload.keys || {};
+    for (const key of ['a', 's', 'd', 'w']) if (key in keys) player.keys[key] = Boolean(keys[key]);
+    if ('shoot' in payload) player.shooting = Boolean(payload.shoot);
+    if (payload.aim && Number.isFinite(Number(payload.aim.x)) && Number.isFinite(Number(payload.aim.y))) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x);
+    if (Number.isFinite(Number(payload.angle))) player.angle = Number(payload.angle);
+    return;
+  }
   if (payload.type === 'shoot' || payload.type === 'fire') { player.shooting = payload.down !== false; if (payload.aim) player.angle = Math.atan2(Number(payload.aim.y) - player.y, Number(payload.aim.x) - player.x); if (payload.down !== false) fire(player); return; }
   if (payload.type === 'restart') { if (player.room.winner || player.room.status === 'finished') restartRoom(player.room); }
 }
