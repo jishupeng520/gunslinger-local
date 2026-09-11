@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no" />
+  <title>神枪手 · Candy Clash</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Baloo+2:wght@500;600;700;800&family=Noto+Sans+SC:wght@500;700;900&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="style.css" />
+</head>
+<body>
+  <div class="noise"></div>
+  <main class="app-shell">
+    <section id="lobby" class="screen active">
+      <div class="brand"><span class="brand-mark">✦</span><div><h1>神枪手</h1><p>CANDY CLASH</p></div></div>
+      <div class="lobby-grid">
+        <div class="hero-copy"><span class="eyebrow">双人 · 实时 · 糖果街机</span><h2>甜甜的战场，<br><em>硬核的准头。</em></h2><p class="lead">躲开会反弹的软糖子弹，抢下最后一颗星星！</p><div class="feature-row"><span>↯ 一次反弹</span><span>♢ 2 人房间</span><span>◈ 轻量对战</span></div></div>
+        <div class="card lobby-card">
+          <div class="card-title"><span class="dot"></span>开始对战</div>
+          <label class="field-label" for="nickname">你的昵称</label><input id="nickname" maxlength="12" placeholder="输入一个可爱的名字" autocomplete="nickname" />
+          <label class="field-label" for="room-code">房间码 <small>6 位字母数字</small></label><input id="room-code" maxlength="6" placeholder="例如 CANDY7" autocapitalize="characters" />
+          <div class="lobby-actions"><button id="create-btn" class="btn primary">创建房间 <span>→</span></button><button id="join-btn" class="btn ghost">加入房间</button></div>
+          <div id="lobby-msg" class="inline-msg" aria-live="polite"></div>
+          <div class="tip"><span>⌨</span> A S D F 移动　·　鼠标 / Space 射击</div>
+        </div>
+      </div>
+      <div class="lobby-footer"><span>© 2025 Candy Clash</span><span class="connection-pill"><i></i> 服务器就绪</span></div>
+    </section>
+
+    <section id="game" class="screen">
+      <header class="game-header"><div class="mini-brand"><span>✦</span> 神枪手</div><div id="room-label" class="room-label">ROOM ——</div><div class="header-right"><span id="online-count">● 连接中</span><button id="leave-btn" class="icon-btn" title="离开房间">×</button></div></header>
+      <div class="arena-wrap"><canvas id="arena" aria-label="神枪手对战地图"></canvas><div id="waiting" class="waiting-overlay"><div class="waiting-orb">✦</div><h3>等另一位神枪手...</h3><p>把房间码发给朋友<br><b id="waiting-code">——</b></p><button id="copy-code" class="btn ghost small">复制房间码</button></div><div id="toast" class="toast" aria-live="polite"></div><div id="result" class="result-overlay"><div id="result-sparkle">✦</div><h2 id="result-title">胜利！</h2><p id="result-sub">你是今天的糖果之王</p><button id="restart-btn" class="btn primary">再来一局 <span>↻</span></button></div></div>
+      <div class="hud"><div class="player-badge"><div id="my-avatar" class="avatar pink">★</div><div><b id="my-name">你</b><small>YOU</small></div><div id="my-hearts" class="hearts">♥ ♥ ♥</div></div><div class="controls-hint"><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd><span>移动</span><i></i><kbd>SPACE</kbd><span>射击</span></div><div class="player-badge opponent"><div id="opp-hearts" class="hearts">♥ ♥ ♥</div><div><b id="opp-name">等待中</b><small>OPPONENT</small></div><div id="opp-avatar" class="avatar yellow">?</div></div></div>
+      <div class="touch-controls"><button data-key="a">A</button><button data-key="s">S</button><button data-key="d">D</button><button data-key="f">F</button><button id="touch-shoot">✦</button></div>
+    </section>
+  </main>
+  <script src="app.js"></script>
+</body>
+</html>

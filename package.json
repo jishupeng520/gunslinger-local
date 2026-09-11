@@ -1,0 +1,14 @@
+{
+  "name": "gunslinger-online",
+  "version": "1.0.0",
+  "private": true,
+  "description": "神枪手：可爱卡通双人在线躲子弹游戏",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "check": "node --check server.js && node --check public/app.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}
