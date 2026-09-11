@@ -5,13 +5,13 @@
   const canvas = $('#arena'), ctx = canvas.getContext('2d');
   const lobby = $('#lobby'), game = $('#game');
   const keys = {a:false,s:false,d:false,f:false};
-  const state = { socket:null, roomCode:'', name:'', playerId:null, players:[], bullets:[], walls:[], winner:null, round:0, connected:false, shooting:false, lastShot:0, reconnectTimer:null, dpr:1, aim:{x:500,y:325}, leaving:false, world:{width:1000,height:650}, reconnecting:false };
+  const state = { socket:null, roomCode:'', name:'', playerId:null, players:[], bullets:[], walls:[], winner:null, round:0, connected:false, shooting:false, lastShot:0, reconnectTimer:null, dpr:1, aim:{x:500,y:325}, leaving:false, world:{width:1000,height:650}, reconnecting:false, renderPlayers:new Map() };
   const COLORS = ['#ff669b','#58b8e8'];
 
   /** 将大厅切换到游戏界面并更新房间信息。 */
-  function enterGame() { lobby.classList.remove('active'); game.classList.add('active'); $('#room-label').textContent = `ROOM ${state.roomCode || '——'}`; $('#waiting-code').textContent = state.roomCode || '——'; $('#my-name').textContent = state.name || '你'; resize(); }
+  function enterGame() { lobby.classList.remove('active'); game.classList.add('active'); $('#room-label').textContent = `ROOM ${state.roomCode || '——'}`; $('#waiting-code').textContent = state.roomCode || '——'; $('#my-name').textContent = state.name || '你'; resize(); requestAnimationFrame(resize); }
   /** 将游戏界面恢复为大厅，并清理本局连接状态。 */
-  function leaveGame() { state.leaving = true; clearTimeout(state.reconnectTimer); if (state.socket) state.socket.close(); state.socket = null; state.connected = false; state.reconnecting = false; state.players = []; state.bullets = []; state.walls = []; game.classList.remove('active'); lobby.classList.add('active'); }
+  function leaveGame() { state.leaving = true; clearTimeout(state.reconnectTimer); if (state.socket) state.socket.close(); state.socket = null; state.connected = false; state.reconnecting = false; state.players = []; state.renderPlayers.clear(); state.bullets = []; state.walls = []; game.classList.remove('active'); lobby.classList.add('active'); }
   /** 生成可读的六位房间码。 */
   function makeRoomCode() { const chars = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; return Array.from({length:6}, () => chars[Math.floor(Math.random()*chars.length)]).join(''); }
   /** 在页面顶部显示短暂的提示消息。 @param {string} message 要展示的中文提示。 */
@@ -40,7 +40,7 @@
       state.roomCode = data.roomCode || state.roomCode; state.playerId = data.playerId || state.playerId; state.world = data.world || state.world;
       state.walls = data.walls || state.walls; updatePlayers(data.players || []); toggleWaiting((data.status || '').toLowerCase() !== 'playing' && (data.players || []).length < 2); return;
     }
-    if (type === 'state' || type === 'game_state') { state.round = data.round || state.round; state.bullets = Array.isArray(data.bullets) ? data.bullets : Object.values(data.bullets || {}); state.walls = data.walls || state.walls; updatePlayers(data.players || []); state.winner = data.winner ?? null; if (state.winner) showResult(state.winner); else $('#result').classList.add('hidden'); toggleWaiting(state.players.length < 2); return; }
+    if (type === 'state' || type === 'game_state') { state.round = data.round || state.round; state.bullets = Array.isArray(data.bullets) ? data.bullets : Object.values(data.bullets || {}); state.walls = data.walls || state.walls; state.world = data.world || state.world; updatePlayers(data.players || []); state.winner = data.winner ?? null; if (state.winner) showResult(state.winner); else $('#result').classList.add('hidden'); toggleWaiting(state.players.length < 2); return; }
     if (type === 'event' || type === 'message') { if (data.message) toast(data.message); if (data.event === 'start' || data.event === 'round_start') toast('开战！'); if (data.event === 'win' || data.event === 'round_end') showResult(data.winner); return; }
     if (type === 'error') { $('#lobby-msg').textContent = data.message || '房间操作失败'; toast(data.message || '操作失败'); }
   }
@@ -59,7 +59,8 @@
   /** 将浏览器画布坐标转换为服务端世界坐标，保证瞄准方向在不同屏幕上一致。 */
   function pointerAim(ev) { const r = canvas.getBoundingClientRect(); return {x:(ev.clientX-r.left)/r.width*state.world.width, y:(ev.clientY-r.top)/r.height*state.world.height}; }
   canvas.addEventListener('pointermove', e => { if (state.connected) sendInput(pointerAim(e)); });
-  canvas.addEventListener('pointerdown', e => { e.preventDefault(); state.shooting = true; sendInput(pointerAim(e)); });
+  canvas.addEventListener('pointerdown', e => { if (e.button !== 0) return; e.preventDefault(); state.shooting = true; sendInput(pointerAim(e)); });
+  canvas.addEventListener('contextmenu', e => e.preventDefault());
   window.addEventListener('pointerup', () => { if (state.shooting) { state.shooting = false; sendInput(); } });
   window.addEventListener('keydown', e => { const k=e.key.toLowerCase(); if (k in keys) { keys[k]=true; sendInput(); } if (e.code==='Space') { e.preventDefault(); state.shooting=true; sendInput(); } });
   window.addEventListener('keyup', e => { const k=e.key.toLowerCase(); if (k in keys) keys[k]=false; if (e.code==='Space') state.shooting=false; sendInput(); });
@@ -71,19 +72,23 @@
   $('#restart-btn').onclick = () => { state.winner=null; $('#result').classList.add('hidden'); send({type:'restart'}); };
   $('#copy-code').onclick = async () => { try { await navigator.clipboard.writeText(state.roomCode); toast('房间码已复制'); } catch { toast(`房间码：${state.roomCode}`); } };
   window.addEventListener('resize', resize);
+  // 房间切换和移动端旋转都可能改变竞技场尺寸，持续同步 Canvas 分辨率。
+  if (typeof ResizeObserver !== 'undefined') new ResizeObserver(resize).observe($('.arena-wrap'));
   setInterval(() => { if (state.connected && (state.shooting || Object.values(keys).some(Boolean))) sendInput(); }, 80);
 
   /** 绘制带圆角的 Canvas 矩形。 @param {CanvasRenderingContext2D} c 绘图上下文。 @param {number} x 左上角 X。 @param {number} y 左上角 Y。 @param {number} w 宽度。 @param {number} h 高度。 @param {number} r 圆角半径。 */
-  function roundedRect(c,x,y,w,h,r){c.beginPath();c.roundRect(x,y,w,h,r);c.fill()}
+  function roundedRect(c,x,y,w,h,r){c.beginPath(); if (typeof c.roundRect === 'function') c.roundRect(x,y,w,h,r); else { c.moveTo(x+r,y); c.arcTo(x+w,y,x+w,y+h,r); c.arcTo(x+w,y+h,x,y+h,r); c.arcTo(x,y+h,x,y,r); c.arcTo(x,y,x+w,y,r); } c.fill()}
   /** 绘制糖果色渐变背景与装饰圆点。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
   function drawBackground(w,h){ const g=ctx.createLinearGradient(0,0,w,h);g.addColorStop(0,'#c9eee7');g.addColorStop(1,'#9cd9d2');ctx.fillStyle=g;ctx.fillRect(0,0,w,h); ctx.globalAlpha=.16; for(let i=0;i<18;i++){ctx.fillStyle=i%2?'#fff':'#70bfb6';ctx.beginPath();ctx.arc((i*173)%w,(i*91)%h,20+(i%3)*13,0,Math.PI*2);ctx.fill()}ctx.globalAlpha=1}
   /** 绘制边界墙和地图内的随机掩体。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
-  function drawWalls(w,h){ (state.walls.length?state.walls:[{x:.03,y:.04,w:.94,h:.035},{x:.03,y:.925,w:.94,h:.035},{x:.03,y:.04,w:.035,h:.92},{x:.935,y:.04,w:.035,h:.92},{x:.36,y:.35,w:.22,h:.045},{x:.54,y:.63,w:.18,h:.045}]).forEach((wall,i)=>{const x=wall.x<=1?wall.x*w:wall.x,y=wall.y<=1?wall.y*h:wall.y,ww=wall.w<=1?wall.w*w:wall.w,hh=wall.h<=1?wall.h*h:wall.h;ctx.fillStyle='#8063aa';roundedRect(ctx,x+4,y+6,ww,hh,8);ctx.fillStyle=i%3===0?'#a98dc9':'#997cbe';roundedRect(ctx,x,y,ww,hh,8);ctx.fillStyle='#cdb8e7';roundedRect(ctx,x+8,y+4,Math.max(8,ww-20),Math.min(5,hh/3),3)}) }
+  function drawWalls(w,h){ const boundary=[{x:25,y:25,w:950,h:18},{x:25,y:607,w:950,h:18},{x:25,y:25,w:18,h:600},{x:957,y:25,w:18,h:600}]; const walls=boundary.concat(state.walls || []); const sx=w/state.world.width, sy=h/state.world.height; walls.forEach((wall,i)=>{const x=wall.x*sx,y=wall.y*sy,ww=wall.w*sx,hh=wall.h*sy;ctx.fillStyle='#8063aa';roundedRect(ctx,x+4*sx,y+6*sy,ww,hh,8);ctx.fillStyle=i%3===0?'#a98dc9':'#997cbe';roundedRect(ctx,x,y,ww,hh,8);ctx.fillStyle='#cdb8e7';roundedRect(ctx,x+8*sx,y+4*sy,Math.max(8*sx,ww-20*sx),Math.min(5*sy,hh/3),3)}) }
   /** 绘制一个带表情的卡通角色。 @param {object} p 服务端玩家状态。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
-  function drawPlayer(p,w,h){ const x=(p.x<=1?p.x*w:p.x),y=(p.y<=1?p.y*h:p.y),r=Math.min(w,h)*.034,col=p.id===state.playerId?COLORS[0]:COLORS[1];ctx.save();ctx.translate(x,y);ctx.fillStyle='#5d477f33';ctx.beginPath();ctx.ellipse(0,r*1.1,r*1.2,r*.42,0,0,Math.PI*2);ctx.fill();ctx.fillStyle=col;ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.arc(r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.fill();ctx.fillStyle='#423454';ctx.beginPath();ctx.arc(-r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.arc(r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#423454';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,r*.05,r*.3,0,Math.PI);ctx.stroke();ctx.fillStyle='#ffdf6b';ctx.beginPath();ctx.arc(0,-r*.85,r*.32,0,Math.PI*2);ctx.fill();ctx.restore() }
+  function drawPlayer(p,w,h){ const sx=w/state.world.width,sy=h/state.world.height,x=p.x*sx,y=p.y*sy,r=Math.min(w,h)*.034,col=p.id===state.playerId?COLORS[0]:COLORS[1];ctx.save();ctx.translate(x,y);ctx.fillStyle='#5d477f33';ctx.beginPath();ctx.ellipse(0,r*1.1,r*1.2,r*.42,0,0,Math.PI*2);ctx.fill();ctx.rotate(Number(p.angle)||0);ctx.fillStyle='#ffe28a';roundedRect(ctx,r*.35,-r*.18,r*1.05,r*.36,r*.12);ctx.fillStyle='#ffb35e';roundedRect(ctx,r*1.15,-r*.12,r*.3,r*.24,r*.08);ctx.rotate(-(Number(p.angle)||0));ctx.fillStyle=col;ctx.beginPath();ctx.arc(0,0,r,0,Math.PI*2);ctx.fill();ctx.fillStyle='#fff';ctx.beginPath();ctx.arc(-r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.arc(r*.32,-r*.1,r*.16,0,Math.PI*2);ctx.fill();ctx.fillStyle='#423454';ctx.beginPath();ctx.arc(-r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.arc(r*.3,-r*.08,r*.07,0,Math.PI*2);ctx.fill();ctx.strokeStyle='#423454';ctx.lineWidth=2;ctx.beginPath();ctx.arc(0,r*.05,r*.3,0,Math.PI);ctx.stroke();ctx.fillStyle='#ffdf6b';ctx.beginPath();ctx.arc(0,-r*.85,r*.32,0,Math.PI*2);ctx.fill();ctx.restore() }
   /** 绘制可爱的糖果子弹及其高光。 @param {object} b 服务端子弹状态。 @param {number} w 画布 CSS 宽度。 @param {number} h 画布 CSS 高度。 */
-  function drawBullet(b,w,h){const x=(b.x<=1?b.x*w:b.x),y=(b.y<=1?b.y*h:b.y);ctx.fillStyle='#fff4a8';ctx.shadowColor='#ffcb62';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(x,y,Math.max(5,Math.min(w,h)*.012),0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.fillStyle='#ff8da8';ctx.beginPath();ctx.arc(x-2,y-2,2,0,Math.PI*2);ctx.fill()}
+  function drawBullet(b,w,h){const x=b.x*w/state.world.width,y=b.y*h/state.world.height;ctx.fillStyle='#fff4a8';ctx.shadowColor='#ffcb62';ctx.shadowBlur=12;ctx.beginPath();ctx.arc(x,y,Math.max(5,Math.min(w,h)*.012),0,Math.PI*2);ctx.fill();ctx.shadowBlur=0;ctx.fillStyle='#ff8da8';ctx.beginPath();ctx.arc(x-2,y-2,2,0,Math.PI*2);ctx.fill()}
   /** 按屏幕刷新率循环渲染当前对战状态。 */
-  function render(){ if(game.classList.contains('active')){const w=canvas.width/state.dpr,h=canvas.height/state.dpr;ctx.setTransform(state.dpr,0,0,state.dpr,0,0);drawBackground(w,h);drawWalls(w,h);state.bullets.forEach(b=>drawBullet(b,w,h));state.players.forEach(p=>drawPlayer(p,w,h));} requestAnimationFrame(render)}
+  /** 对服务端快照做轻量插值，减少网络抖动造成的两端画面跳动。 */
+  function smoothPlayer(player){ const old=state.renderPlayers.get(player.id); if(!old){ state.renderPlayers.set(player.id,{...player}); return player; } old.x += (player.x-old.x)*.35; old.y += (player.y-old.y)*.35; old.angle = player.angle; old.hp = player.hp; return old; }
+  function render(){ if(game.classList.contains('active')){const w=canvas.width/state.dpr,h=canvas.height/state.dpr;ctx.setTransform(state.dpr,0,0,state.dpr,0,0);drawBackground(w,h);drawWalls(w,h);state.bullets.forEach(b=>drawBullet(b,w,h));state.players.forEach(p=>drawPlayer(smoothPlayer(p),w,h));} requestAnimationFrame(render)}
   render();
 })();

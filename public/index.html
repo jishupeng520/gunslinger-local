@@ -21,7 +21,7 @@
           <label class="field-label" for="room-code">房间码 <small>6 位字母数字</small></label><input id="room-code" maxlength="6" placeholder="例如 CANDY7" autocapitalize="characters" />
           <div class="lobby-actions"><button id="create-btn" class="btn primary">创建房间 <span>→</span></button><button id="join-btn" class="btn ghost">加入房间</button></div>
           <div id="lobby-msg" class="inline-msg" aria-live="polite"></div>
-          <div class="tip"><span>⌨</span> A S D F 移动　·　鼠标 / Space 射击</div>
+          <div class="tip"><span>⌨</span> A S D F 移动　·　鼠标瞄准　·　左键射击</div>
         </div>
       </div>
       <div class="lobby-footer"><span>© 2025 Candy Clash</span><span class="connection-pill"><i></i> 服务器就绪</span></div>
@@ -29,8 +29,8 @@
 
     <section id="game" class="screen">
       <header class="game-header"><div class="mini-brand"><span>✦</span> 神枪手</div><div id="room-label" class="room-label">ROOM ——</div><div class="header-right"><span id="online-count">● 连接中</span><button id="leave-btn" class="icon-btn" title="离开房间">×</button></div></header>
-      <div class="arena-wrap"><canvas id="arena" aria-label="神枪手对战地图"></canvas><div id="waiting" class="waiting-overlay"><div class="waiting-orb">✦</div><h3>等另一位神枪手...</h3><p>把房间码发给朋友<br><b id="waiting-code">——</b></p><button id="copy-code" class="btn ghost small">复制房间码</button></div><div id="toast" class="toast" aria-live="polite"></div><div id="result" class="result-overlay"><div id="result-sparkle">✦</div><h2 id="result-title">胜利！</h2><p id="result-sub">你是今天的糖果之王</p><button id="restart-btn" class="btn primary">再来一局 <span>↻</span></button></div></div>
-      <div class="hud"><div class="player-badge"><div id="my-avatar" class="avatar pink">★</div><div><b id="my-name">你</b><small>YOU</small></div><div id="my-hearts" class="hearts">♥ ♥ ♥</div></div><div class="controls-hint"><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd><span>移动</span><i></i><kbd>SPACE</kbd><span>射击</span></div><div class="player-badge opponent"><div id="opp-hearts" class="hearts">♥ ♥ ♥</div><div><b id="opp-name">等待中</b><small>OPPONENT</small></div><div id="opp-avatar" class="avatar yellow">?</div></div></div>
+      <div class="arena-wrap"><canvas id="arena" width="1000" height="650" aria-label="神枪手对战地图"></canvas><div id="waiting" class="waiting-overlay"><div class="waiting-orb">✦</div><h3>等另一位神枪手...</h3><p>把房间码发给朋友<br><b id="waiting-code">——</b></p><button id="copy-code" class="btn ghost small">复制房间码</button></div><div id="toast" class="toast" aria-live="polite"></div><div id="result" class="result-overlay hidden"><div id="result-sparkle">✦</div><h2 id="result-title">胜利！</h2><p id="result-sub">你是今天的糖果之王</p><button id="restart-btn" class="btn primary">再来一局 <span>↻</span></button></div></div>
+      <div class="hud"><div class="player-badge"><div id="my-avatar" class="avatar pink">★</div><div><b id="my-name">你</b><small>YOU</small></div><div id="my-hearts" class="hearts">♥ ♥ ♥</div></div><div class="controls-hint"><kbd>A</kbd><kbd>S</kbd><kbd>D</kbd><kbd>F</kbd><span>移动</span><i></i><kbd>鼠标左键</kbd><span>瞄准 / 射击</span></div><div class="player-badge opponent"><div id="opp-hearts" class="hearts">♥ ♥ ♥</div><div><b id="opp-name">等待中</b><small>OPPONENT</small></div><div id="opp-avatar" class="avatar yellow">?</div></div></div>
       <div class="touch-controls"><button data-key="a">A</button><button data-key="s">S</button><button data-key="d">D</button><button data-key="f">F</button><button id="touch-shoot">✦</button></div>
     </section>
   </main>
