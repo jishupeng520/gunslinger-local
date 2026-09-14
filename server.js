@@ -1,5 +1,5 @@
 /**
- * 神枪手双人在线对战服务端。使用 Node HTTP 提供静态文件，WebSocket 负责房间、输入与实时物理。
+ * 神枪手多人在线对战服务端。使用 Node HTTP 提供静态文件，WebSocket 负责大厅、房间、输入与实时物理。
  * 游戏状态仅保存在单进程内，适合 Render 单实例部署；客户端断线后保留席位 15 秒供重连。
  */
 const http = require('node:http');
