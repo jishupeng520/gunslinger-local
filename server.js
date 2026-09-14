@@ -115,7 +115,7 @@ function errorEvent(socket, message) { send(socket, 'error', { message }); }
  */
 function broadcastLobby() {
   const online = [...sessions.values()].map((session) => ({ id: session.id, name: session.player?.name || session.name || `枪手${session.id.slice(0, 3)}`, roomCode: session.player?.room?.code || null, status: session.player?.room?.status || 'lobby' }));
-  const roomList = [...rooms.values()].filter((room) => room.players.size > 0).map((room) => ({ roomCode: room.code, status: room.status, playerCount: room.players.size, maxPlayers: MAX_PLAYERS_PER_ROOM, minPlayers: MIN_PLAYERS_TO_START, players: [...room.players.values()].map((player) => ({ id: player.id, name: player.name, color: player.color, hp: player.hp, connected: Boolean(player.socket) })) }));
+  const roomList = [...rooms.values()].filter((room) => room.players.size > 0 && room.status !== 'finished').map((room) => ({ roomCode: room.code, status: room.status, playerCount: room.players.size, maxPlayers: MAX_PLAYERS_PER_ROOM, minPlayers: MIN_PLAYERS_TO_START, players: [...room.players.values()].map((player) => ({ id: player.id, name: player.name, color: player.color, hp: player.hp, connected: Boolean(player.socket) })) }));
   for (const session of sessions.values()) { send(session.socket, 'online', { players: online, count: online.length }); send(session.socket, 'roomList', { rooms: roomList }); }
 }
 
