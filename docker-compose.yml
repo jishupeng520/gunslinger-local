@@ -1,0 +1,13 @@
+services:
+  gunslinger:
+    build:
+      context: .
+    container_name: gunslinger
+    environment:
+      NODE_ENV: production
+      PORT: 3000
+      HOST: 0.0.0.0
+    ports:
+      # 左侧是宿主机端口；如 3000 被占用，可用 GAME_PORT=3010 启动。
+      - "${GAME_PORT:-3000}:3000"
+    restart: unless-stopped
